@@ -9,6 +9,47 @@ st.set_page_config(
     layout="wide",
 )
 
+st.set_page_config(
+    page_title="Inventario de Materiales",
+    page_icon="📦",
+    layout="wide",
+)
+
+# ==========================================
+# LOGIN
+# ==========================================
+import streamlit_authenticator as stauth
+
+credentials = {
+    "usernames": {
+        user: dict(data)
+        for user, data in st.secrets["credentials"]["usernames"].items()
+    }
+}
+
+authenticator = stauth.Authenticate(
+    credentials,
+    st.secrets["cookie"]["name"],
+    st.secrets["cookie"]["key"],
+    st.secrets["cookie"]["expiry_days"],
+    auto_hash=False,
+)
+
+try:
+    authenticator.login()
+except Exception as e:
+    st.error(e)
+
+if st.session_state.get("authentication_status") is False:
+    st.error("Usuario o contraseña incorrectos")
+    st.stop()
+elif st.session_state.get("authentication_status") is None:
+    st.warning("Por favor ingresa tu usuario y contraseña")
+    st.stop()
+
+authenticator.logout("Cerrar sesión", "sidebar")
+st.sidebar.write(f'Bienvenido, {st.session_state.get("name")}')
+
 
 @st.cache_data(ttl=300)
 def cargar_inventario():
