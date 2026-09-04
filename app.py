@@ -2,19 +2,13 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import psycopg2
+from zoneinfo import ZoneInfo
 
 st.set_page_config(
     page_title="Inventario de Materiales",
     page_icon="📦",
     layout="wide",
 )
-
-st.set_page_config(
-    page_title="Inventario de Materiales",
-    page_icon="📦",
-    layout="wide",
-)
-
 # ==========================================
 # LOGIN
 # ==========================================
@@ -73,8 +67,23 @@ def cargar_movimientos():
     return df
 
 
+@st.cache_data(ttl=300)
+def obtener_ultima_actualizacion():
+    database_url = st.secrets["DATABASE_URL"]
+    conexion = psycopg2.connect(database_url, sslmode="require")
+    cur = conexion.cursor()
+    cur.execute(
+        "SELECT ultima_actualizacion FROM metadata_actualizacion "
+        "ORDER BY id DESC LIMIT 1;"
+    )
+    resultado = cur.fetchone()
+    conexion.close()
+    return resultado[0] if resultado else None
+
+
 df_inv = cargar_inventario()
 df_mov = cargar_movimientos()
+ultima_actualizacion = obtener_ultima_actualizacion()
 
 # ==========================================
 # FILTROS
@@ -108,6 +117,20 @@ if item_busqueda:
 
 st.title("Inventario de Materiales")
 st.caption("Stock, consumo promedio, alertas de reposición y valorización por bodega.")
+
+if ultima_actualizacion:
+    # Neon guarda la hora en UTC; la convertimos a hora de Colombia
+    # solo para mostrarla (el dato guardado sigue siendo UTC).
+    hora_colombia = ultima_actualizacion.replace(
+        tzinfo=ZoneInfo("UTC")
+    ).astimezone(ZoneInfo("America/Bogota"))
+
+    st.info(
+        f"🕒 Última actualización de datos: "
+        f"{hora_colombia.strftime('%d/%m/%Y %I:%M %p')}"
+    )
+else:
+    st.warning("🕒 Aún no hay registro de la última actualización de datos.")
 
 col1, col2, col3, col4, col5 = st.columns(5)
 
