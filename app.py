@@ -134,8 +134,21 @@ else:
 
 col1, col2, col3, col4, col5 = st.columns(5)
 
+def formato_compacto(valor):
+    """Abrevia números grandes: 2,915,123 -> 2.92M, 850,000 -> 850K."""
+    if valor >= 1_000_000:
+        return f"${valor / 1_000_000:,.2f}M"
+    if valor >= 1_000:
+        return f"${valor / 1_000:,.0f}K"
+    return f"${valor:,.0f}"
+
+
 col1.metric("Stock total (unidades)", f"{df_filtrado['existencias'].sum():,.0f}")
-col2.metric("Valor total inventario", f"${df_filtrado['valor_total'].sum():,.0f}")
+col2.metric(
+    "Valor total inventario",
+    formato_compacto(df_filtrado['valor_total'].sum()),
+    help=f"Valor exacto: ${df_filtrado['valor_total'].sum():,.0f}",
+)
 col3.metric(
     "Ítems críticos",
     f"{(df_filtrado['alerta_stock'] == '🔴 CRÍTICO').sum():,}",
