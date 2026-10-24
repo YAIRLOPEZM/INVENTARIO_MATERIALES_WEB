@@ -81,6 +81,215 @@ def obtener_ultima_actualizacion():
     return resultado[0] if resultado else None
 
 
+# ==========================================
+# EXPORTAR: TABLA "CONSUMO POR MES" (cantidad y pesos por ítem y equipo)
+# ==========================================
+
+def construir_excel_consumo(df):
+    """
+    Arma el libro de Excel con la tabla de consumo por mes:
+    una fila por año + bodega + ítem + equipo (Rig), con cantidad y valor
+    en pesos de cada mes, y hojas por equipo, por tercero y el detalle.
+    """
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter as L
+
+    d = df.copy()
+    d["anio"] = d["fecha_movimiento"].dt.year
+    d["mes"] = d["fecha_movimiento"].dt.month
+    for c in ("tercero", "rig", "proyecto", "centro_costo", "bodega_nombre"):
+        d[c] = d[c].fillna("SIN DATO")
+
+    meses = ["Ene", "Feb", "Mar", "Abr", "May", "Jun",
+             "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
+
+    f_head = Font(bold=True, color="FFFFFF", name="Arial")
+    fill_a = PatternFill("solid", fgColor="1F3864")
+    fill_b = PatternFill("solid", fgColor="2F5597")
+    fill_tot = PatternFill("solid", fgColor="D9E1F2")
+    f_norm = Font(name="Arial", size=10)
+    f_bold = Font(name="Arial", size=10, bold=True)
+    centro = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    wb = Workbook()
+
+    # ---------- Hoja 1: Consumo por mes ----------
+    ws = wb.active
+    ws.title = "Consumo por mes"
+    ws["A1"] = "Consumo por ítem, equipo (Rig), año y mes — cantidad y pesos"
+    ws["A1"].font = Font(bold=True, size=13, name="Arial")
+
+    claves = ["anio", "bodega_nombre", "item_codigo", "item_descripcion", "rig"]
+    agr = (
+        d.groupby(claves + ["mes"])
+        .agg(cant=("cantidad", "sum"), val=("costo_total", "sum"))
+        .reset_index()
+    )
+    ultimo = d.groupby(claves)["fecha_movimiento"].max()
+    grupos = sorted(
+        {tuple(r) for r in agr[claves].itertuples(index=False, name=None)},
+        key=lambda t: (-t[0], t[1], t[2], t[4]),
+    )
+    tabla = {(*r[:5], r[5]): (r[6], r[7]) for r in agr.itertuples(index=False, name=None)}
+
+    fijas = ["Año", "Bodega", "Item", "Descripción", "Equipo (Rig)",
+             "Último movimiento", "Costo unit. prom."]
+    nf = len(fijas)
+    fm = nf + 1                       # primera columna de meses
+    qt = fm + 24                      # total cantidad
+    pt = qt + 1                       # total pesos
+
+    for c, t in enumerate(fijas, 1):
+        ws.merge_cells(start_row=3, start_column=c, end_row=4, end_column=c)
+        ws.cell(3, c, t)
+    for k, m in enumerate(meses):
+        c = fm + 2 * k
+        ws.merge_cells(start_row=3, start_column=c, end_row=3, end_column=c + 1)
+        ws.cell(3, c, m)
+        ws.cell(4, c, "Cant.")
+        ws.cell(4, c + 1, "Valor $")
+    ws.merge_cells(start_row=3, start_column=qt, end_row=3, end_column=pt)
+    ws.cell(3, qt, "TOTAL")
+    ws.cell(4, qt, "Cant.")
+    ws.cell(4, pt, "Valor $")
+    for c in range(1, pt + 1):
+        for r in (3, 4):
+            x = ws.cell(r, c)
+            x.font = f_head
+            x.alignment = centro
+            x.fill = fill_b if (c >= fm and c < qt and ((c - fm) // 2) % 2) else fill_a
+
+    primera = 5
+    for i, g in enumerate(grupos, primera):
+        anio, bod, cod, desc, rig = g
+        ws.cell(i, 1, int(anio))
+        ws.cell(i, 2, bod)
+        ws.cell(i, 3, cod)
+        ws.cell(i, 4, desc)
+        ws.cell(i, 5, rig)
+        ult = ultimo[g]
+        ws.cell(i, 6, ult.to_pydatetime() if hasattr(ult, "to_pydatetime") else ult).number_format = "dd/mm/yyyy"
+        ws.cell(i, 7, f"=IFERROR({L(pt)}{i}/{L(qt)}{i},0)").number_format = "#,##0.00"
+        for k in range(12):
+            cant, val = tabla.get((*g, k + 1), (0, 0))
+            ws.cell(i, fm + 2 * k, float(cant)).number_format = "#,##0.##"
+            ws.cell(i, fm + 2 * k + 1, float(val)).number_format = "#,##0"
+        qs = ",".join(f"{L(fm + 2 * k)}{i}" for k in range(12))
+        ps = ",".join(f"{L(fm + 1 + 2 * k)}{i}" for k in range(12))
+        ws.cell(i, qt, f"=SUM({qs})").number_format = "#,##0.##"
+        ws.cell(i, pt, f"=SUM({ps})").number_format = "#,##0"
+        for c in range(1, pt + 1):
+            ws.cell(i, c).font = f_bold if c >= qt else f_norm
+
+    ultima = primera + len(grupos) - 1
+    t1, t2 = ultima + 1, ultima + 2
+    ws.cell(t1, 4, "TOTAL (solo filas visibles según filtro)")
+    ws.cell(t2, 4, "TOTAL GENERAL (sin filtro)")
+    for c in range(fm, pt + 1):
+        fmt = "#,##0.##" if (c - fm) % 2 == 0 else "#,##0"
+        ws.cell(t1, c, f"=SUBTOTAL(109,{L(c)}{primera}:{L(c)}{ultima})").number_format = fmt
+        ws.cell(t2, c, f"=SUM({L(c)}{primera}:{L(c)}{ultima})").number_format = fmt
+    for c in range(1, pt + 1):
+        ws.cell(t1, c).font = f_bold
+        ws.cell(t1, c).fill = fill_tot
+        ws.cell(t2, c).font = Font(name="Arial", size=10, italic=True)
+
+    for c, w in zip("ABCDEFG", [7, 28, 15, 50, 16, 14, 14]):
+        ws.column_dimensions[c].width = w
+    for c in range(fm, pt + 1):
+        ws.column_dimensions[L(c)].width = 9 if (c - fm) % 2 == 0 and c < qt else 15
+    ws.column_dimensions[L(qt)].width = 10
+    ws.freeze_panes = ws.cell(primera, fm)
+    ws.auto_filter.ref = f"A4:{L(pt)}{ultima}"
+
+    # ---------- Hojas por equipo y por tercero ----------
+    def hoja_resumen(titulo, col, etiqueta):
+        w = wb.create_sheet(titulo)
+        w["A1"] = f"Costo por {etiqueta} y por mes, en pesos"
+        w["A1"].font = Font(bold=True, size=13, name="Arial")
+        encabezados = ["Año", etiqueta] + meses + ["TOTAL"]
+        for c, t in enumerate(encabezados, 1):
+            x = w.cell(3, c, t)
+            x.font = f_head
+            x.fill = fill_a
+            x.alignment = centro
+        piv = (
+            d.groupby(["anio", col, "mes"])["costo_total"].sum().reset_index()
+        )
+        tot = piv.groupby(["anio", col])["costo_total"].sum().sort_values(ascending=False)
+        orden = sorted(tot.index, key=lambda k: (-k[0], -tot[k]))
+        valores = {(r[0], r[1], r[2]): r[3] for r in piv.itertuples(index=False, name=None)}
+        for i, (anio, nombre) in enumerate(orden, 4):
+            w.cell(i, 1, int(anio)).font = f_norm
+            w.cell(i, 2, nombre).font = f_norm
+            for k in range(12):
+                w.cell(i, 3 + k, float(valores.get((anio, nombre, k + 1), 0))).number_format = "#,##0"
+            w.cell(i, 15, f"=SUM(C{i}:N{i})").number_format = "#,##0"
+            w.cell(i, 15).font = f_bold
+        u = 3 + len(orden)
+        w.cell(u + 1, 2, "TOTAL (filas visibles)")
+        w.cell(u + 2, 2, "TOTAL GENERAL")
+        for c in range(3, 16):
+            w.cell(u + 1, c, f"=SUBTOTAL(109,{L(c)}4:{L(c)}{u})").number_format = "#,##0"
+            w.cell(u + 2, c, f"=SUM({L(c)}4:{L(c)}{u})").number_format = "#,##0"
+        for c in range(1, 16):
+            w.cell(u + 1, c).font = f_bold
+            w.cell(u + 1, c).fill = fill_tot
+        w.column_dimensions["A"].width = 7
+        w.column_dimensions["B"].width = 42
+        for c in range(3, 16):
+            w.column_dimensions[L(c)].width = 14
+        w.freeze_panes = "C4"
+        w.auto_filter.ref = f"A3:{L(15)}{u}"
+
+    hoja_resumen("Por Equipo", "rig", "Equipo (Rig)")
+    hoja_resumen("Por Tercero", "tercero", "Tercero")
+
+    # ---------- Detalle ----------
+    wd = wb.create_sheet("Detalle")
+    cols = [
+        ("fecha_movimiento", "Fecha"), ("bodega_nombre", "Bodega"),
+        ("numero", "N° documento"), ("item_codigo", "Código"),
+        ("item_descripcion", "Descripción"), ("cantidad", "Cantidad"),
+        ("costo_unitario", "Costo unitario"), ("costo_total", "Costo total"),
+        ("tercero", "Tercero"), ("rig", "Equipo (Rig)"),
+        ("proyecto", "Proyecto"), ("centro_costo", "Centro de costo"),
+    ]
+    for c, (_, t) in enumerate(cols, 1):
+        x = wd.cell(1, c, t)
+        x.font = f_head
+        x.fill = fill_a
+        x.alignment = centro
+    det = d.sort_values("fecha_movimiento", ascending=False)
+    for i, fila in enumerate(det[[c for c, _ in cols]].itertuples(index=False, name=None), 2):
+        for c, v in enumerate(fila, 1):
+            if c == 1:
+                v = v.to_pydatetime()
+            elif v is not None and str(v) == "nan":
+                v = None
+            x = wd.cell(i, c, v)
+            x.font = f_norm
+            if c == 1:
+                x.number_format = "dd/mm/yyyy"
+            elif c in (7, 8):
+                x.number_format = "#,##0"
+    for c, w_ in zip("ABCDEFGHIJKL", [12, 28, 14, 15, 50, 10, 14, 14, 36, 16, 30, 20]):
+        wd.column_dimensions[c].width = w_
+    wd.freeze_panes = "A2"
+    wd.auto_filter.ref = f"A1:L{len(det) + 1}"
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+@st.cache_data
+def excel_consumo_mensual(dataframe):
+    return construir_excel_consumo(dataframe)
+
+
 df_inv = cargar_inventario()
 df_sal = cargar_salidas()
 # Nombre de la bodega para mostrarlo en el historial
@@ -539,4 +748,14 @@ with tab_sal:
         file_name="salidas_filtradas.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="descarga_salidas",
+    )
+
+    st.download_button(
+        "📅 Exportar tabla de consumo por mes (Excel completo)",
+        data=excel_consumo_mensual(ds),
+        file_name="consumo_por_mes.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        help="Una fila por ítem y equipo, con cantidad y valor en pesos de cada mes, "
+             "más hojas por equipo, por tercero y el detalle. Respeta los filtros de arriba.",
+        key="descarga_consumo_mensual",
     )
