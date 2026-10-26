@@ -6,8 +6,8 @@ from zoneinfo import ZoneInfo
 
 # Paleta de colores para las gráficas (se ve bien en tema oscuro y claro)
 PALETA = [
-    "#4DA3FF", "#FF7A59", "#2ED3A5", "#FFC53D", "#B27CFF", "#FF5C8A",
-    "#5BD1E8", "#9BE15D", "#FF9F40", "#7C8CFF", "#E86AD9", "#47C17C",
+    "#D98327", "#ECE8AF", "#4A943E", "#186049", "#287A74", "#55A9A0",
+    "#AEEED3", "#9BE15D", "#FFF8B0", "#030164", "#363199", "#D6FB61",
 ]
 MESES_ES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun",
             "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
