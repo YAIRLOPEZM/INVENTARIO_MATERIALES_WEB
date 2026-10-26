@@ -68,6 +68,24 @@ def cargar_salidas():
 
 
 @st.cache_data(ttl=300)
+def cargar_servicios():
+    """Entradas de PO de ítems que no son de inventario (servicios).
+    Si la tabla todavía no existe, devuelve una tabla vacía."""
+    database_url = st.secrets["DATABASE_URL"]
+    conexion = psycopg2.connect(database_url, sslmode="require")
+    try:
+        df = pd.read_sql(
+            "SELECT * FROM inv_entrada WHERE es_servicio",
+            conexion,
+            parse_dates=["fecha_movimiento"],
+        )
+    except Exception:
+        df = pd.DataFrame()
+    conexion.close()
+    return df
+
+
+@st.cache_data(ttl=300)
 def obtener_ultima_actualizacion():
     database_url = st.secrets["DATABASE_URL"]
     conexion = psycopg2.connect(database_url, sslmode="require")
@@ -85,7 +103,7 @@ def obtener_ultima_actualizacion():
 # EXPORTAR: TABLA "CONSUMO POR MES" (cantidad y pesos por ítem y equipo)
 # ==========================================
 
-def construir_excel_consumo(df):
+def construir_excel_consumo(df, serv=None):
     """
     Arma el libro de Excel con la tabla de consumo por mes:
     una fila por año + bodega + ítem + equipo (Rig), con cantidad y valor
@@ -280,18 +298,134 @@ def construir_excel_consumo(df):
     wd.freeze_panes = "A2"
     wd.auto_filter.ref = f"A1:L{len(det) + 1}"
 
+    # ---------- Servicios (entradas de PO de ítems que no son de inventario) ----------
+    if serv is not None and not serv.empty:
+        sv = serv.copy()
+        sv["anio"] = sv["fecha_movimiento"].dt.year
+        sv["mes"] = sv["fecha_movimiento"].dt.month
+        for c in ("tercero", "rig", "bodega_nombre"):
+            sv[c] = sv[c].fillna("SIN DATO")
+
+        wsv = wb.create_sheet("Servicios por mes", 1)
+        wsv["A1"] = "Servicios por ítem, equipo (Rig), año y mes — valor en pesos"
+        wsv["A1"].font = Font(bold=True, size=13, name="Arial")
+        enc = ["Año", "Bodega", "Item", "Descripción", "Equipo (Rig)"] + meses + ["TOTAL $"]
+        for c, t in enumerate(enc, 1):
+            x = wsv.cell(3, c, t)
+            x.font = f_head
+            x.fill = fill_a
+            x.alignment = centro
+        kv = ["anio", "bodega_nombre", "item_codigo", "item_descripcion", "rig"]
+        pv = sv.groupby(kv + ["mes"])["costo_total"].sum().reset_index()
+        tv = {(*r[:5], r[5]): r[6] for r in pv.itertuples(index=False, name=None)}
+        gv = sorted({tuple(r) for r in pv[kv].itertuples(index=False, name=None)},
+                    key=lambda t: (-t[0], t[1], t[2], t[4]))
+        for i, g in enumerate(gv, 4):
+            for c, v in enumerate(g, 1):
+                wsv.cell(i, c, int(v) if c == 1 else v).font = f_norm
+            for k in range(12):
+                wsv.cell(i, 6 + k, float(tv.get((*g, k + 1), 0))).number_format = "#,##0"
+            wsv.cell(i, 18, f"=SUM(F{i}:Q{i})").number_format = "#,##0"
+            wsv.cell(i, 18).font = f_bold
+        ult_v = 3 + len(gv)
+        wsv.cell(ult_v + 1, 4, "TOTAL (solo filas visibles según filtro)")
+        wsv.cell(ult_v + 2, 4, "TOTAL GENERAL (sin filtro)")
+        for c in range(6, 19):
+            wsv.cell(ult_v + 1, c, f"=SUBTOTAL(109,{L(c)}4:{L(c)}{ult_v})").number_format = "#,##0"
+            wsv.cell(ult_v + 2, c, f"=SUM({L(c)}4:{L(c)}{ult_v})").number_format = "#,##0"
+        for c in range(1, 19):
+            wsv.cell(ult_v + 1, c).font = f_bold
+            wsv.cell(ult_v + 1, c).fill = fill_tot
+        for c, w_ in zip("ABCDE", [7, 28, 15, 50, 16]):
+            wsv.column_dimensions[c].width = w_
+        for c in range(6, 19):
+            wsv.column_dimensions[L(c)].width = 14
+        wsv.freeze_panes = "F4"
+        wsv.auto_filter.ref = f"A3:R{ult_v}"
+
+        # ---------- Gasto total por equipo: materiales + servicios ----------
+        wt = wb.create_sheet("Total por Equipo", 3)
+        wt["A1"] = "Gasto por equipo (Rig) y mes, en pesos — materiales + servicios"
+        wt["A1"].font = Font(bold=True, size=13, name="Arial")
+        enc = ["Año", "Equipo (Rig)", "Clase"] + meses + ["TOTAL"]
+        for c, t in enumerate(enc, 1):
+            x = wt.cell(3, c, t)
+            x.font = f_head
+            x.fill = fill_a
+            x.alignment = centro
+        m_ = d[["anio", "rig", "mes", "costo_total"]].assign(clase="Material")
+        s_ = sv[["anio", "rig", "mes", "costo_total"]].assign(clase="Servicio")
+        ambos = pd.concat([m_, s_], ignore_index=True)
+        pt_ = ambos.groupby(["anio", "rig", "clase", "mes"])["costo_total"].sum()
+        tot_ = ambos.groupby(["anio", "rig", "clase"])["costo_total"].sum()
+        orden_ = sorted(tot_.index, key=lambda k: (-k[0], k[1], k[2]))
+        for i, (a_, r_, c_) in enumerate(orden_, 4):
+            wt.cell(i, 1, int(a_)).font = f_norm
+            wt.cell(i, 2, r_).font = f_norm
+            wt.cell(i, 3, c_).font = f_norm
+            for k in range(12):
+                wt.cell(i, 4 + k, float(pt_.get((a_, r_, c_, k + 1), 0))).number_format = "#,##0"
+            wt.cell(i, 16, f"=SUM(D{i}:O{i})").number_format = "#,##0"
+            wt.cell(i, 16).font = f_bold
+        ult_t = 3 + len(orden_)
+        wt.cell(ult_t + 1, 3, "TOTAL (filas visibles)")
+        wt.cell(ult_t + 2, 3, "TOTAL GENERAL")
+        for c in range(4, 17):
+            wt.cell(ult_t + 1, c, f"=SUBTOTAL(109,{L(c)}4:{L(c)}{ult_t})").number_format = "#,##0"
+            wt.cell(ult_t + 2, c, f"=SUM({L(c)}4:{L(c)}{ult_t})").number_format = "#,##0"
+        for c in range(1, 17):
+            wt.cell(ult_t + 1, c).font = f_bold
+            wt.cell(ult_t + 1, c).fill = fill_tot
+        for c, w_ in zip("ABC", [7, 30, 12]):
+            wt.column_dimensions[c].width = w_
+        for c in range(4, 17):
+            wt.column_dimensions[L(c)].width = 14
+        wt.freeze_panes = "D4"
+        wt.auto_filter.ref = f"A3:P{ult_t}"
+
+        # ---------- Detalle de servicios ----------
+        wds = wb.create_sheet("Detalle servicios")
+        cs = [("fecha_movimiento", "Fecha"), ("bodega_nombre", "Bodega"), ("numero", "N° entrada"),
+              ("po", "PO"), ("item_codigo", "Código"), ("item_descripcion", "Descripción"),
+              ("detalle", "Detalle"), ("cantidad", "Cantidad"), ("costo_unitario", "Costo unitario"),
+              ("costo_total", "Costo total"), ("tercero", "Proveedor"), ("rig", "Equipo (Rig)"),
+              ("proyecto", "Proyecto"), ("centro_costo", "Centro de costo")]
+        for c, (_, t) in enumerate(cs, 1):
+            x = wds.cell(1, c, t)
+            x.font = f_head
+            x.fill = fill_a
+            x.alignment = centro
+        dv = sv.sort_values("fecha_movimiento", ascending=False)
+        for i, fila in enumerate(dv[[c for c, _ in cs]].itertuples(index=False, name=None), 2):
+            for c, v in enumerate(fila, 1):
+                if c == 1:
+                    v = v.to_pydatetime()
+                elif v is not None and str(v) in ("nan", "None", "NaT"):
+                    v = None
+                x = wds.cell(i, c, v)
+                x.font = f_norm
+                if c == 1:
+                    x.number_format = "dd/mm/yyyy"
+                elif c in (9, 10):
+                    x.number_format = "#,##0"
+        for c, w_ in zip("ABCDEFGHIJKLMN", [12, 28, 14, 12, 15, 45, 40, 10, 14, 14, 36, 16, 30, 20]):
+            wds.column_dimensions[c].width = w_
+        wds.freeze_panes = "A2"
+        wds.auto_filter.ref = f"A1:N{len(dv) + 1}"
+
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
 
 
 @st.cache_data
-def excel_consumo_mensual(dataframe):
-    return construir_excel_consumo(dataframe)
+def excel_consumo_mensual(dataframe, servicios=None):
+    return construir_excel_consumo(dataframe, servicios)
 
 
 df_inv = cargar_inventario()
 df_sal = cargar_salidas()
+df_serv = cargar_servicios()
 # Nombre de la bodega para mostrarlo en el historial
 nombres_bodega = (
     df_inv.dropna(subset=["bodega_codigo"])
@@ -719,7 +853,7 @@ with tab_sal:
     detalle = ds.sort_values("fecha_movimiento", ascending=False)[[
         "fecha_movimiento", "bodega_nombre", "numero", "item_codigo",
         "item_descripcion", "cantidad", "costo_unitario", "costo_total",
-        "tercero", "rig", "proyecto", "centro_costo",
+        "id_tercero", "tercero", "rig", "proyecto", "centro_costo",
     ]]
 
     st.dataframe(
@@ -733,6 +867,7 @@ with tab_sal:
             "cantidad": st.column_config.NumberColumn("Cantidad", format="%.2f"),
             "costo_unitario": st.column_config.NumberColumn("Costo unitario", format="$%.0f"),
             "costo_total": st.column_config.NumberColumn("Costo total", format="$%.0f"),
+            "id_tercero": "ID Tercero",
             "tercero": "Tercero",
             "rig": "Equipo (Rig)",
             "proyecto": "Proyecto",
@@ -750,12 +885,45 @@ with tab_sal:
         key="descarga_salidas",
     )
 
+    # Servicios (entradas de PO de ítems que no son de inventario), con los
+    # mismos filtros de año, mes, bodega, equipo y proyecto.
+    serv_sel = df_serv.copy()
+    if not serv_sel.empty:
+        serv_sel["anio"] = serv_sel["fecha_movimiento"].dt.year
+        serv_sel["mes"] = serv_sel["fecha_movimiento"].dt.month
+        serv_sel["bodega_nombre"] = serv_sel["bodega_codigo"].map(nombres_bodega).fillna("SIN DATO")
+        for c in ("rig", "proyecto", "centro_costo"):
+            serv_sel[c] = serv_sel[c].fillna("SIN DATO")
+        if anio_sel:
+            serv_sel = serv_sel[serv_sel["anio"].isin(anio_sel)]
+        if mes_sel:
+            serv_sel = serv_sel[serv_sel["mes"].isin(mes_sel)]
+        if bodega_sal:
+            serv_sel = serv_sel[serv_sel["bodega_nombre"].isin(bodega_sal)]
+        if rig_sel:
+            serv_sel = serv_sel[serv_sel["rig"].isin(rig_sel)]
+        if proyecto_sel:
+            serv_sel = serv_sel[serv_sel["proyecto"].isin(proyecto_sel)]
+        if busqueda_sal:
+            m_s = (
+                serv_sel["item_codigo"].astype(str).str.contains(busqueda_sal, case=False, na=False)
+                | serv_sel["item_descripcion"].astype(str).str.contains(busqueda_sal, case=False, na=False)
+                | serv_sel["numero"].astype(str).str.contains(busqueda_sal, case=False, na=False)
+            )
+            serv_sel = serv_sel[m_s]
+        if tercero_sel:
+            st.caption(
+                "ℹ️ El filtro «Tercero» no se aplica a los servicios (allí el tercero es el proveedor)."
+            )
+
     st.download_button(
         "📅 Exportar tabla de consumo por mes (Excel completo)",
-        data=excel_consumo_mensual(ds),
+        data=excel_consumo_mensual(ds, serv_sel if not serv_sel.empty else None),
         file_name="consumo_por_mes.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         help="Una fila por ítem y equipo, con cantidad y valor en pesos de cada mes, "
-             "más hojas por equipo, por tercero y el detalle. Respeta los filtros de arriba.",
+             "más hojas por equipo, por tercero y el detalle. Si hay servicios cargados, "
+             "agrega sus hojas y el total por equipo (materiales + servicios). "
+             "Respeta los filtros de arriba.",
         key="descarga_consumo_mensual",
     )
