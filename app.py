@@ -4,6 +4,19 @@ import plotly.express as px
 import psycopg2
 from zoneinfo import ZoneInfo
 
+# Paleta de colores para las gráficas (se ve bien en tema oscuro y claro)
+PALETA = [
+    "#4DA3FF", "#FF7A59", "#2ED3A5", "#FFC53D", "#B27CFF", "#FF5C8A",
+    "#5BD1E8", "#9BE15D", "#FF9F40", "#7C8CFF", "#E86AD9", "#47C17C",
+]
+MESES_ES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun",
+            "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
+
+
+def etiqueta_mes(fechas):
+    """'Mar 2026' para cada fecha (en español)."""
+    return fechas.dt.month.map(lambda m: MESES_ES[m - 1]) + " " + fechas.dt.year.astype(str)
+
 st.set_page_config(
     page_title="Inventario de Materiales",
     page_icon="📦",
@@ -546,8 +559,12 @@ with tab_inv:
     with col_der:
         st.subheader("Top 15 ítems por valor en inventario")
         top_valor = df_filtrado.nlargest(15, "valor_total")[["item_descripcion", "valor_total"]]
-        fig2 = px.bar(top_valor, x="valor_total", y="item_descripcion", orientation="h")
-        fig2.update_layout(yaxis={"categoryorder": "total ascending"}, yaxis_title="", xaxis_title="Valor total")
+        fig2 = px.bar(
+            top_valor, x="valor_total", y="item_descripcion", orientation="h",
+            color="item_descripcion", color_discrete_sequence=PALETA,
+        )
+        fig2.update_layout(yaxis={"categoryorder": "total ascending"}, yaxis_title="",
+                           xaxis_title="Valor total", showlegend=False)
         st.plotly_chart(fig2, use_container_width=True)
 
     st.divider()
@@ -641,11 +658,14 @@ with tab_inv:
             sal_item.assign(mes=sal_item["fecha_movimiento"].dt.to_period("M").dt.to_timestamp())
             .groupby("mes", as_index=False)["cantidad"].sum()
         )
+        por_mes["Mes"] = etiqueta_mes(por_mes["mes"])
         fig3 = px.bar(
-            por_mes, x="mes", y="cantidad",
+            por_mes.sort_values("mes"), x="Mes", y="cantidad", color="Mes",
+            color_discrete_sequence=PALETA,
+            category_orders={"Mes": list(por_mes.sort_values("mes")["Mes"])},
             title=f"Unidades entregadas por mes — {item_hist}",
         )
-        fig3.update_layout(xaxis_title="", yaxis_title="Unidades")
+        fig3.update_layout(xaxis_title="", yaxis_title="Unidades", showlegend=False)
         st.plotly_chart(fig3, use_container_width=True)
 
         st.dataframe(
@@ -783,8 +803,13 @@ with tab_sal:
             ds.assign(periodo=ds["fecha_movimiento"].dt.to_period("M").dt.to_timestamp())
             .groupby("periodo", as_index=False)["costo_total"].sum()
         )
-        fig_mes = px.bar(por_mes, x="periodo", y="costo_total")
-        fig_mes.update_layout(xaxis_title="", yaxis_title="Costo total")
+        por_mes["Mes"] = etiqueta_mes(por_mes["periodo"])
+        fig_mes = px.bar(
+            por_mes.sort_values("periodo"), x="Mes", y="costo_total", color="Mes",
+            color_discrete_sequence=PALETA,
+            category_orders={"Mes": list(por_mes.sort_values("periodo")["Mes"])},
+        )
+        fig_mes.update_layout(xaxis_title="", yaxis_title="Costo total", showlegend=False)
         st.plotly_chart(fig_mes, use_container_width=True)
 
     with g2:
@@ -793,9 +818,12 @@ with tab_sal:
             ds.groupby("rig", as_index=False)["costo_total"].sum()
             .sort_values("costo_total", ascending=False).head(15)
         )
-        fig_rig = px.bar(por_rig, x="costo_total", y="rig", orientation="h")
+        fig_rig = px.bar(
+            por_rig, x="costo_total", y="rig", orientation="h", color="rig",
+            color_discrete_sequence=PALETA,
+        )
         fig_rig.update_layout(yaxis={"categoryorder": "total ascending"},
-                              yaxis_title="", xaxis_title="Costo total")
+                              yaxis_title="", xaxis_title="Costo total", showlegend=False)
         st.plotly_chart(fig_rig, use_container_width=True)
 
     st.subheader("Costo por tercero (top 15)")
@@ -803,9 +831,12 @@ with tab_sal:
         ds.groupby("tercero", as_index=False)["costo_total"].sum()
         .sort_values("costo_total", ascending=False).head(15)
     )
-    fig_ter = px.bar(por_ter, x="costo_total", y="tercero", orientation="h")
+    fig_ter = px.bar(
+        por_ter, x="costo_total", y="tercero", orientation="h", color="tercero",
+        color_discrete_sequence=PALETA,
+    )
     fig_ter.update_layout(yaxis={"categoryorder": "total ascending"},
-                          yaxis_title="", xaxis_title="Costo total")
+                          yaxis_title="", xaxis_title="Costo total", showlegend=False)
     st.plotly_chart(fig_ter, use_container_width=True)
 
     st.divider()
