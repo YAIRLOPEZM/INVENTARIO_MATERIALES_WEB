@@ -6,8 +6,8 @@ from zoneinfo import ZoneInfo
 
 # Paleta de colores para las gráficas (se ve bien en tema oscuro y claro)
 PALETA = [
-    "#1F06AC", "#0F42C0", "#5882E8", "#E3EF4F", "#086288", "#4D8DBA",
-    "#97D7FF", "#AEEED3", "#4C2365", "#7F5D99", "#9E7EB5", "#C4A4DA",
+    "#4DA3FF", "#FF7A59", "#2ED3A5", "#FFC53D", "#B27CFF", "#FF5C8A",
+    "#5BD1E8", "#9BE15D", "#FF9F40", "#7C8CFF", "#E86AD9", "#47C17C",
 ]
 MESES_ES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun",
             "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
@@ -135,6 +135,8 @@ def construir_excel_consumo(df, serv=None):
 
     meses = ["Ene", "Feb", "Mar", "Abr", "May", "Jun",
              "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
+    # Formato de cantidades: sin decimales si todas son enteras (evita "5," con coma final)
+    cant_fmt = "#,##0" if (d["cantidad"].fillna(0) % 1 == 0).all() else "#,##0.00"
 
     f_head = Font(bold=True, color="FFFFFF", name="Arial")
     fill_a = PatternFill("solid", fgColor="1F3864")
@@ -166,7 +168,7 @@ def construir_excel_consumo(df, serv=None):
     tabla = {(*r[:5], r[5]): (r[6], r[7]) for r in agr.itertuples(index=False, name=None)}
 
     fijas = ["Año", "Bodega", "Item", "Descripción", "Equipo (Rig)",
-             "Último movimiento", "Costo unit. prom."]
+             "Fecha de última entrega", "Costo unit. prom."]
     nf = len(fijas)
     fm = nf + 1                       # primera columna de meses
     qt = fm + 24                      # total cantidad
@@ -205,11 +207,11 @@ def construir_excel_consumo(df, serv=None):
         ws.cell(i, 7, f"=IFERROR({L(pt)}{i}/{L(qt)}{i},0)").number_format = "#,##0.00"
         for k in range(12):
             cant, val = tabla.get((*g, k + 1), (0, 0))
-            ws.cell(i, fm + 2 * k, float(cant)).number_format = "#,##0.##"
+            ws.cell(i, fm + 2 * k, float(cant)).number_format = cant_fmt
             ws.cell(i, fm + 2 * k + 1, float(val)).number_format = "#,##0"
         qs = ",".join(f"{L(fm + 2 * k)}{i}" for k in range(12))
         ps = ",".join(f"{L(fm + 1 + 2 * k)}{i}" for k in range(12))
-        ws.cell(i, qt, f"=SUM({qs})").number_format = "#,##0.##"
+        ws.cell(i, qt, f"=SUM({qs})").number_format = cant_fmt
         ws.cell(i, pt, f"=SUM({ps})").number_format = "#,##0"
         for c in range(1, pt + 1):
             ws.cell(i, c).font = f_bold if c >= qt else f_norm
@@ -219,13 +221,24 @@ def construir_excel_consumo(df, serv=None):
     ws.cell(t1, 4, "TOTAL (solo filas visibles según filtro)")
     ws.cell(t2, 4, "TOTAL GENERAL (sin filtro)")
     for c in range(fm, pt + 1):
-        fmt = "#,##0.##" if (c - fm) % 2 == 0 else "#,##0"
+        fmt = cant_fmt if (c - fm) % 2 == 0 else "#,##0"
         ws.cell(t1, c, f"=SUBTOTAL(109,{L(c)}{primera}:{L(c)}{ultima})").number_format = fmt
         ws.cell(t2, c, f"=SUM({L(c)}{primera}:{L(c)}{ultima})").number_format = fmt
     for c in range(1, pt + 1):
         ws.cell(t1, c).font = f_bold
         ws.cell(t1, c).fill = fill_tot
         ws.cell(t2, c).font = Font(name="Arial", size=10, italic=True)
+
+    # SUBTOTAL ARRIBA (fila 2, siempre visible porque las filas 1-4 están inmovilizadas):
+    # suma solo las filas que quedan visibles al filtrar por ítem, equipo, año, etc.
+    ws.cell(2, 4, "SUBTOTAL (solo filas visibles según filtro)")
+    for c in range(1, pt + 1):
+        ws.cell(2, c).fill = fill_tot
+        ws.cell(2, c).font = f_bold
+    ws.cell(2, 4).alignment = Alignment(horizontal="right")
+    for c in range(fm, pt + 1):
+        fmt = cant_fmt if (c - fm) % 2 == 0 else "#,##0"
+        ws.cell(2, c, f"=SUBTOTAL(109,{L(c)}{primera}:{L(c)}{ultima})").number_format = fmt
 
     for c, w in zip("ABCDEFG", [7, 28, 15, 50, 16, 14, 14]):
         ws.column_dimensions[c].width = w
@@ -353,6 +366,13 @@ def construir_excel_consumo(df, serv=None):
             wsv.column_dimensions[c].width = w_
         for c in range(6, 19):
             wsv.column_dimensions[L(c)].width = 14
+        wsv.cell(2, 4, "SUBTOTAL (solo filas visibles según filtro)")
+        wsv.cell(2, 4).alignment = Alignment(horizontal="right")
+        for c in range(1, 19):
+            wsv.cell(2, c).fill = fill_tot
+            wsv.cell(2, c).font = f_bold
+        for c in range(6, 19):
+            wsv.cell(2, c, f"=SUBTOTAL(109,{L(c)}4:{L(c)}{ult_v})").number_format = "#,##0"
         wsv.freeze_panes = "F4"
         wsv.auto_filter.ref = f"A3:R{ult_v}"
 
@@ -425,6 +445,26 @@ def construir_excel_consumo(df, serv=None):
             wds.column_dimensions[c].width = w_
         wds.freeze_panes = "A2"
         wds.auto_filter.ref = f"A1:N{len(dv) + 1}"
+
+    # ---------- Notas: cómo leer la tabla ----------
+    wn = wb.create_sheet("Notas")
+    wn["A1"] = "Cómo leer este archivo"
+    wn["A1"].font = Font(bold=True, size=13, name="Arial")
+    notas = [
+        "Cada fila de «Consumo por mes» es una combinación única de Año + Bodega + Ítem + Equipo (Rig).",
+        "«Fecha de última entrega» es la fecha MÁS RECIENTE de esa fila. No es la única entrega: "
+        "si el ítem salió varias veces, las demás fechas están en los meses con cantidad.",
+        "Las columnas de cada mes (Cant. y Valor $) suman TODAS las entregas de ese mes. "
+        "Por eso una fila puede tener valores en enero y una última entrega en octubre.",
+        "Para ver cada entrega con su fecha, usa la hoja «Detalle».",
+        "SUBTOTAL (fila 2, arriba): suma solo las filas visibles. Filtra por ítem, equipo o año y el subtotal cambia. "
+        "Los totales de la parte de abajo de la hoja se ven al final de la tabla.",
+        "Los filtros se ponen en la fila 4 (encabezados de cada columna).",
+    ]
+    for i, t in enumerate(notas, 3):
+        wn.cell(i, 1, t).font = f_norm
+        wn.cell(i, 1).alignment = Alignment(wrap_text=True, vertical="top")
+    wn.column_dimensions["A"].width = 120
 
     buffer = io.BytesIO()
     wb.save(buffer)
